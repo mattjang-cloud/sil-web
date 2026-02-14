@@ -565,12 +565,25 @@ function EnvironmentStep({
   })();
 
   const cities = [
-    { id: "seoul", emoji: "🇰🇷", name: { ko: "서울", en: "Seoul", ja: "ソウル" } },
-    { id: "tokyo", emoji: "🇯🇵", name: { ko: "도쿄", en: "Tokyo", ja: "東京" } },
-    { id: "la", emoji: "🇺🇸", name: { ko: "LA", en: "Los Angeles", ja: "ロサンゼルス" } },
-    { id: "nyc", emoji: "🗽", name: { ko: "뉴욕", en: "New York", ja: "ニューヨーク" } },
-    { id: "paris", emoji: "🇫🇷", name: { ko: "파리", en: "Paris", ja: "パリ" } },
-    { id: "bangkok", emoji: "🇹🇭", name: { ko: "방콕", en: "Bangkok", ja: "バンコク" } },
+    // 미국
+    { id: "la", emoji: "🇺🇸", name: { ko: "LA", en: "Los Angeles", ja: "ロサンゼルス" }, group: "US" },
+    { id: "nyc", emoji: "🇺🇸", name: { ko: "뉴욕", en: "New York", ja: "ニューヨーク" }, group: "US" },
+    { id: "sf", emoji: "🇺🇸", name: { ko: "샌프란", en: "SF", ja: "SF" }, group: "US" },
+    { id: "seattle", emoji: "🇺🇸", name: { ko: "시애틀", en: "Seattle", ja: "シアトル" }, group: "US" },
+    { id: "chicago", emoji: "🇺🇸", name: { ko: "시카고", en: "Chicago", ja: "シカゴ" }, group: "US" },
+    { id: "miami", emoji: "🇺🇸", name: { ko: "마이애미", en: "Miami", ja: "マイアミ" }, group: "US" },
+    { id: "houston", emoji: "🇺🇸", name: { ko: "휴스턴", en: "Houston", ja: "ヒューストン" }, group: "US" },
+    { id: "dallas", emoji: "🇺🇸", name: { ko: "달라스", en: "Dallas", ja: "ダラス" }, group: "US" },
+    // 캐나다
+    { id: "toronto", emoji: "🇨🇦", name: { ko: "토론토", en: "Toronto", ja: "トロント" }, group: "CA" },
+    { id: "vancouver", emoji: "🇨🇦", name: { ko: "밴쿠버", en: "Vancouver", ja: "バンクーバー" }, group: "CA" },
+    { id: "montreal", emoji: "🇨🇦", name: { ko: "몬트리올", en: "Montreal", ja: "モントリオール" }, group: "CA" },
+    { id: "calgary", emoji: "🇨🇦", name: { ko: "캘거리", en: "Calgary", ja: "カルガリー" }, group: "CA" },
+    // 일본
+    { id: "tokyo", emoji: "🇯🇵", name: { ko: "도쿄", en: "Tokyo", ja: "東京" }, group: "JP" },
+    { id: "osaka", emoji: "🇯🇵", name: { ko: "오사카", en: "Osaka", ja: "大阪" }, group: "JP" },
+    { id: "kyoto", emoji: "🇯🇵", name: { ko: "교토", en: "Kyoto", ja: "京都" }, group: "JP" },
+    { id: "fukuoka", emoji: "🇯🇵", name: { ko: "후쿠오카", en: "Fukuoka", ja: "福岡" }, group: "JP" },
   ];
 
   const seasons = [
@@ -599,7 +612,7 @@ function EnvironmentStep({
       } catch {
         onComplete({
           temp: 22, humidity: 45, uvi: 6,
-          description: "Partly cloudy", city: "Seoul", aqi: 75,
+          description: "Partly cloudy", city: "LA", aqi: 75,
         });
       }
     }
@@ -640,20 +653,27 @@ function EnvironmentStep({
 
       {/* City Selection */}
       <p className="text-xs text-muted-foreground text-center mb-3">{t("env_or_select")}</p>
-      <div className="grid grid-cols-3 gap-2 mb-5">
-        {cities.map((city) => (
-          <Button
-            key={city.id}
-            variant="outline"
-            size="sm"
-            className="rounded-full text-xs"
-            onClick={() => selectCity(city.id)}
-            disabled={loading}
-          >
-            {city.emoji} {city.name[language]}
-          </Button>
-        ))}
-      </div>
+      {(["US", "CA", "JP"] as const).map((group) => (
+        <div key={group} className="mb-3">
+          <p className="text-[10px] text-muted-foreground/60 mb-1.5 px-1">
+            {group === "US" ? "🇺🇸 USA" : group === "CA" ? "🇨🇦 Canada" : "🇯🇵 Japan"}
+          </p>
+          <div className="grid grid-cols-4 gap-1.5">
+            {cities.filter((c) => c.group === group).map((city) => (
+              <Button
+                key={city.id}
+                variant="outline"
+                size="sm"
+                className="rounded-full text-[11px] px-2 h-8"
+                onClick={() => selectCity(city.id)}
+                disabled={loading}
+              >
+                {city.name[language]}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ))}
 
       {/* Season Selection */}
       <p className="text-xs text-muted-foreground text-center mb-3">{t("env_season")}</p>
