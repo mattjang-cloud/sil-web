@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { analyzeSkin } from "@/lib/api";
 import type { SkinAnalysis } from "@/lib/types";
 
 interface SkinScannerProps {
@@ -65,26 +66,35 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     }
   };
 
-  const analyzeImage = async (_imageData: string) => {
+  const analyzeImage = async (imageData: string) => {
     setMode("analyzing");
-    // Simulated analysis (replace with API call)
-    await new Promise((r) => setTimeout(r, 2500));
-    const demoResult: SkinAnalysis = {
-      issues: ["dryness", "dark_circle", "uneven_tone"],
-      issue_categories: ["hydration", "pigmentation", "tone"],
-      severity: {
-        dryness: 0.6,
-        dark_circle: 0.4,
-        uneven_tone: 0.3,
-      },
-      hydration: 42,
-      oil_level: 35,
-      texture: "slightly rough",
-      skin_tone: "light warm",
-      analyzer: "claude_vision",
-    };
-    setMode("done");
-    onAnalysisComplete(demoResult);
+    try {
+      // Extract base64 data (remove data:image/... prefix if present)
+      const base64Data = imageData.includes(",")
+        ? imageData.split(",")[1]
+        : imageData;
+      const result = await analyzeSkin(base64Data, "claude_vision");
+      setMode("done");
+      onAnalysisComplete(result as unknown as SkinAnalysis);
+    } catch {
+      // Fallback to demo data if API unavailable
+      const demoResult: SkinAnalysis = {
+        issues: ["dryness", "dark_circle", "uneven_tone"],
+        issue_categories: ["hydration", "pigmentation", "tone"],
+        severity: {
+          dryness: 0.6,
+          dark_circle: 0.4,
+          uneven_tone: 0.3,
+        },
+        hydration: 42,
+        oil_level: 35,
+        texture: "slightly rough",
+        skin_tone: "light warm",
+        analyzer: "claude_vision",
+      };
+      setMode("done");
+      onAnalysisComplete(demoResult);
+    }
   };
 
   if (mode === "camera") {

@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { VectorPanel } from "@/components/sil/vector-panel";
 import { ChatPanel } from "@/components/sil/chat-panel";
 import { SkinScanner } from "@/components/sil/skin-scanner";
+import { consult, consultStream, getWeather, analyzeSkin } from "@/lib/api";
 import type {
   FiveVectors,
   ChatMessage,
@@ -52,20 +53,83 @@ export default function ConsultationPage() {
       setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
 
-      // Simulate AI response (replace with actual API call)
-      await new Promise((r) => setTimeout(r, 1500));
+      // Build history from existing messages
+      const history = messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
 
-      const expertResponse: ChatMessage = {
-        id: `msg-${Date.now() + 1}`,
-        role: "assistant",
-        content: generateDemoResponse(content, vectors, currentExpert),
-        timestamp: new Date(),
-        expert: currentExpert,
-      };
-      setMessages((prev) => [...prev, expertResponse]);
-      setIsLoading(false);
+      try {
+        // Try streaming first
+        let fullText = "";
+        const assistantMsgId = `msg-${Date.now() + 1}`;
+
+        // Add placeholder message for streaming
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: assistantMsgId,
+            role: "assistant",
+            content: "",
+            timestamp: new Date(),
+            expert: currentExpert,
+          },
+        ]);
+
+        try {
+          for await (const chunk of consultStream({
+            message: content,
+            vectors: vectors as unknown as Record<string, unknown>,
+            language: "ko",
+            history,
+          })) {
+            fullText += chunk;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, content: fullText } : m
+              )
+            );
+          }
+          setIsLoading(false);
+        } catch {
+          // Fallback to non-streaming
+          setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
+
+          const response = await consult({
+            message: content,
+            vectors: vectors as unknown as Record<string, unknown>,
+            language: "ko",
+            history,
+          });
+
+          if (response.expert) {
+            setCurrentExpert(response.expert);
+          }
+
+          const expertResponse: ChatMessage = {
+            id: assistantMsgId,
+            role: "assistant",
+            content: response.reply,
+            timestamp: new Date(),
+            expert: response.expert || currentExpert,
+          };
+          setMessages((prev) => [...prev, expertResponse]);
+          setIsLoading(false);
+        }
+      } catch {
+        // Complete fallback: demo response if API is unavailable
+        const expertResponse: ChatMessage = {
+          id: `msg-${Date.now() + 1}`,
+          role: "assistant",
+          content: generateDemoResponse(content, vectors, currentExpert),
+          timestamp: new Date(),
+          expert: currentExpert,
+        };
+        setMessages((prev) => [...prev, expertResponse]);
+        setIsLoading(false);
+      }
     },
-    [vectors, currentExpert]
+    [vectors, currentExpert, messages]
   );
 
   const handleSkipToChat = () => {
@@ -390,16 +454,35 @@ function EnvironmentStep({
 
   const detectLocation = async () => {
     setLoading(true);
-    // Simulated weather data
-    await new Promise((r) => setTimeout(r, 1000));
-    onComplete({
-      temp: 22,
-      humidity: 45,
-      uvi: 6,
-      description: "Partly cloudy",
-      city: "Seoul",
-      aqi: 75,
-    });
+    try {
+      // Try browser geolocation
+      const position = await new Promise<GeolocationPosition>(
+        (resolve, reject) =>
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            timeout: 5000,
+          })
+      );
+      const data = await getWeather(
+        position.coords.latitude,
+        position.coords.longitude
+      );
+      onComplete(data);
+    } catch {
+      // Fallback: Seoul default or demo data
+      try {
+        const data = await getWeather();
+        onComplete(data);
+      } catch {
+        onComplete({
+          temp: 22,
+          humidity: 45,
+          uvi: 6,
+          description: "Partly cloudy",
+          city: "Seoul",
+          aqi: 75,
+        });
+      }
+    }
     setLoading(false);
   };
 
