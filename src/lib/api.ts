@@ -76,6 +76,7 @@ export interface ConsultRequest {
   vectors: Record<string, unknown>;
   language: "ko" | "en" | "ja";
   history: { role: string; content: string }[];
+  persona_id?: string;
 }
 
 export interface ConsultResponse {
@@ -179,12 +180,44 @@ export interface WeatherResponse {
 
 export async function getWeather(
   lat?: number,
-  lon?: number
+  lon?: number,
+  city?: string,
+  season?: string,
 ): Promise<WeatherResponse> {
   const query = new URLSearchParams();
   if (lat) query.set("lat", String(lat));
   if (lon) query.set("lon", String(lon));
+  if (city) query.set("city", city);
+  if (season) query.set("season", season);
   return apiFetch<WeatherResponse>(`/api/weather?${query}`);
+}
+
+// ─── Personas ───
+
+export interface PersonaInfo {
+  id: string;
+  name: string;
+  subtitle: string;
+  emoji: string;
+  avatar_gradient: string;
+  specialty_tags: string[];
+}
+
+export async function getPersonas(lang: string = "ko"): Promise<PersonaInfo[]> {
+  return apiFetch<PersonaInfo[]>(`/api/personas?lang=${lang}`);
+}
+
+// ─── Cities ───
+
+export interface CityInfo {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+}
+
+export async function getCities(lang: string = "ko"): Promise<CityInfo[]> {
+  return apiFetch<CityInfo[]>(`/api/cities?lang=${lang}`);
 }
 
 // ─── Diary ───

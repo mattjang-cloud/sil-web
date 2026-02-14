@@ -22,7 +22,29 @@ export interface SkinAnalysis {
   oil_level?: number;
   texture?: string;
   skin_tone?: string;
+  skin_type?: string;
+  skin_type_code?: number;
+  top_concerns?: string[];
+  brief_note?: string;
+  summary?: string;
   analyzer: "claude_vision" | "facepp" | "both";
+  success?: boolean;
+}
+
+export interface Persona {
+  id: string;
+  name: string;
+  subtitle: string;
+  emoji: string;
+  avatar_gradient: string;
+  specialty_tags: string[];
+}
+
+export interface CityInfo {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
 }
 
 export interface WeatherData {
@@ -117,6 +139,7 @@ export interface ConsultRequest {
   vectors: FiveVectors;
   language: "ko" | "en" | "ja";
   history: { role: string; content: string }[];
+  persona_id?: string;
 }
 
 export interface ConsultResponse {
@@ -146,6 +169,7 @@ export interface SkinDiaryEntry {
 
 export type ConsultationStep =
   | "welcome"
+  | "persona"
   | "skin_scan"
   | "environment"
   | "lifestyle"

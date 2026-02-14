@@ -1,16 +1,18 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { VectorPanel } from "@/components/sil/vector-panel";
 import { ChatPanel } from "@/components/sil/chat-panel";
 import { SkinScanner } from "@/components/sil/skin-scanner";
-import { consult, consultStream, getWeather, analyzeSkin } from "@/lib/api";
+import { PersonaSelector } from "@/components/sil/persona-selector";
+import { consult, consultStream, getWeather } from "@/lib/api";
+import { useLanguage } from "@/lib/language-context";
+import type { PersonaInfo } from "@/lib/api";
 import type {
   FiveVectors,
   ChatMessage,
@@ -20,6 +22,7 @@ import type {
   TPOVector,
   ThemeVector,
   ThemeStyle,
+  SkinAnalysis,
 } from "@/lib/types";
 
 const INITIAL_EXPERT: ExpertInfo = {
@@ -34,9 +37,10 @@ export default function ConsultationPage() {
   const [vectors, setVectors] = useState<FiveVectors>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [currentExpert, setCurrentExpert] =
-    useState<ExpertInfo>(INITIAL_EXPERT);
+  const [currentExpert, setCurrentExpert] = useState<ExpertInfo>(INITIAL_EXPERT);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [selectedPersona, setSelectedPersona] = useState<PersonaInfo | null>(null);
+  const { language, t } = useLanguage();
 
   const completedVectors = Object.keys(vectors).filter(
     (k) => vectors[k as keyof FiveVectors] !== undefined
@@ -53,18 +57,15 @@ export default function ConsultationPage() {
       setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
 
-      // Build history from existing messages
       const history = messages.map((m) => ({
         role: m.role,
         content: m.content,
       }));
 
       try {
-        // Try streaming first
         let fullText = "";
         const assistantMsgId = `msg-${Date.now() + 1}`;
 
-        // Add placeholder message for streaming
         setMessages((prev) => [
           ...prev,
           {
@@ -80,8 +81,9 @@ export default function ConsultationPage() {
           for await (const chunk of consultStream({
             message: content,
             vectors: vectors as unknown as Record<string, unknown>,
-            language: "ko",
+            language,
             history,
+            persona_id: selectedPersona?.id || "dr_beauty",
           })) {
             fullText += chunk;
             setMessages((prev) =>
@@ -92,14 +94,14 @@ export default function ConsultationPage() {
           }
           setIsLoading(false);
         } catch {
-          // Fallback to non-streaming
           setMessages((prev) => prev.filter((m) => m.id !== assistantMsgId));
 
           const response = await consult({
             message: content,
             vectors: vectors as unknown as Record<string, unknown>,
-            language: "ko",
+            language,
             history,
+            persona_id: selectedPersona?.id || "dr_beauty",
           });
 
           if (response.expert) {
@@ -117,11 +119,10 @@ export default function ConsultationPage() {
           setIsLoading(false);
         }
       } catch {
-        // Complete fallback: demo response if API is unavailable
         const expertResponse: ChatMessage = {
           id: `msg-${Date.now() + 1}`,
           role: "assistant",
-          content: generateDemoResponse(content, vectors, currentExpert),
+          content: generateDemoResponse(content, vectors, currentExpert, language),
           timestamp: new Date(),
           expert: currentExpert,
         };
@@ -129,7 +130,7 @@ export default function ConsultationPage() {
         setIsLoading(false);
       }
     },
-    [vectors, currentExpert, messages]
+    [vectors, currentExpert, messages, language, selectedPersona]
   );
 
   const handleSkipToChat = () => {
@@ -144,12 +145,11 @@ export default function ConsultationPage() {
     <div className="min-h-screen pt-16">
       {step === "welcome" ? (
         <WelcomeScreen
-          onStart={() => setStep("skin_scan")}
+          onStart={() => setStep("persona")}
           onSkip={handleSkipToChat}
         />
       ) : step === "chat" ? (
         <div className="flex h-[calc(100vh-4rem)]">
-          {/* Vector Sidebar */}
           {sidebarOpen && (
             <aside className="w-80 border-r border-border/50 bg-card/50 hidden lg:block overflow-hidden">
               <ScrollArea className="h-full">
@@ -162,9 +162,7 @@ export default function ConsultationPage() {
             </aside>
           )}
 
-          {/* Chat Area */}
           <main className="flex-1 flex flex-col">
-            {/* Chat Header */}
             <div className="h-14 border-b border-border/50 flex items-center justify-between px-4 bg-card/30">
               <div className="flex items-center gap-3">
                 <Button
@@ -196,17 +194,17 @@ export default function ConsultationPage() {
                   </Badge>
                 ))}
                 <Badge className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary border-0">
-                  {completedVectors.length}/5 Vectors
+                  {t("chat_vectors_badge").replace("{n}", String(completedVectors.length))}
                 </Badge>
               </div>
             </div>
 
-            {/* Chat Messages */}
             <ChatPanel
               messages={messages}
               isLoading={isLoading}
               onSend={handleSendMessage}
               expert={currentExpert}
+              vectors={vectors}
             />
           </main>
         </div>
@@ -217,6 +215,17 @@ export default function ConsultationPage() {
           onVectorUpdate={handleVectorUpdate}
           onNext={(nextStep) => setStep(nextStep)}
           onSkip={handleSkipToChat}
+          selectedPersona={selectedPersona}
+          onPersonaSelect={(persona) => {
+            setSelectedPersona(persona);
+            setCurrentExpert({
+              name: persona.name,
+              role: persona.subtitle,
+              emoji: persona.emoji,
+              category: "general",
+              persona_id: persona.id,
+            } as ExpertInfo);
+          }}
         />
       )}
     </div>
@@ -232,6 +241,8 @@ function WelcomeScreen({
   onStart: () => void;
   onSkip: () => void;
 }) {
+  const { t } = useLanguage();
+
   return (
     <div className="flex items-center justify-center min-h-[calc(100vh-4rem)] px-4">
       <div className="max-w-lg text-center">
@@ -239,11 +250,10 @@ function WelcomeScreen({
           ✨
         </div>
         <h1 className="text-3xl font-bold tracking-tight mb-4">
-          AI Skin Consultation
+          {t("welcome_title")}
         </h1>
         <p className="text-muted-foreground mb-8 leading-relaxed">
-          Set up your 5 vectors for the most personalized experience, or jump
-          straight into chatting with our AI experts.
+          {t("welcome_desc")}
         </p>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <Button
@@ -251,7 +261,7 @@ function WelcomeScreen({
             className="rounded-full px-8 bg-gradient-to-r from-sil-lavender to-sil-rose text-white border-0 hover:opacity-90 w-full sm:w-auto"
             onClick={onStart}
           >
-            Start 5-Vector Setup
+            {t("welcome_start")}
           </Button>
           <Button
             variant="outline"
@@ -259,7 +269,7 @@ function WelcomeScreen({
             className="rounded-full px-8 border-border/50 w-full sm:w-auto"
             onClick={onSkip}
           >
-            Skip to Chat
+            {t("welcome_skip")}
           </Button>
         </div>
       </div>
@@ -275,49 +285,31 @@ function SetupWizard({
   onVectorUpdate,
   onNext,
   onSkip,
+  selectedPersona,
+  onPersonaSelect,
 }: {
   step: ConsultationStep;
   vectors: FiveVectors;
   onVectorUpdate: (key: keyof FiveVectors, value: unknown) => void;
   onNext: (step: ConsultationStep) => void;
   onSkip: () => void;
+  selectedPersona: PersonaInfo | null;
+  onPersonaSelect: (persona: PersonaInfo) => void;
 }) {
+  const { t } = useLanguage();
+
   const steps: {
     id: ConsultationStep;
     label: string;
     icon: string;
     gradient: string;
   }[] = [
-    {
-      id: "skin_scan",
-      label: "Skin Scan",
-      icon: "U",
-      gradient: "from-sil-rose to-pink-400",
-    },
-    {
-      id: "environment",
-      label: "Environment",
-      icon: "E",
-      gradient: "from-sil-sky to-blue-400",
-    },
-    {
-      id: "lifestyle",
-      label: "Lifestyle",
-      icon: "L",
-      gradient: "from-sil-mint to-emerald-400",
-    },
-    {
-      id: "tpo",
-      label: "TPO",
-      icon: "T",
-      gradient: "from-sil-gold to-amber-400",
-    },
-    {
-      id: "theme",
-      label: "Theme",
-      icon: "V",
-      gradient: "from-sil-lavender to-violet-400",
-    },
+    { id: "persona", label: t("step_persona"), icon: "P", gradient: "from-sil-lavender to-violet-400" },
+    { id: "skin_scan", label: t("step_skin_scan"), icon: "U", gradient: "from-sil-rose to-pink-400" },
+    { id: "environment", label: t("step_environment"), icon: "E", gradient: "from-sil-sky to-blue-400" },
+    { id: "lifestyle", label: t("step_lifestyle"), icon: "L", gradient: "from-sil-mint to-emerald-400" },
+    { id: "tpo", label: t("step_tpo"), icon: "T", gradient: "from-sil-gold to-amber-400" },
+    { id: "theme", label: t("step_theme"), icon: "V", gradient: "from-sil-lavender to-violet-400" },
   ];
 
   const currentIndex = steps.findIndex((s) => s.id === step);
@@ -330,11 +322,11 @@ function SetupWizard({
   return (
     <div className="max-w-2xl mx-auto py-12 px-4">
       {/* Progress */}
-      <div className="flex items-center justify-center gap-2 mb-12">
+      <div className="flex items-center justify-center gap-1.5 mb-12">
         {steps.map((s, i) => (
-          <div key={s.id} className="flex items-center gap-2">
+          <div key={s.id} className="flex items-center gap-1.5">
             <div
-              className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold transition-all ${
+              className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all ${
                 i <= currentIndex
                   ? `bg-gradient-to-br ${s.gradient} text-white shadow-md`
                   : "bg-muted text-muted-foreground"
@@ -344,7 +336,7 @@ function SetupWizard({
             </div>
             {i < steps.length - 1 && (
               <div
-                className={`w-8 h-0.5 ${
+                className={`w-4 h-0.5 ${
                   i < currentIndex ? "bg-primary/40" : "bg-border"
                 }`}
               />
@@ -356,13 +348,24 @@ function SetupWizard({
       {/* Step Content */}
       <Card className="glass-card rounded-2xl overflow-hidden">
         <CardContent className="p-8">
+          {step === "persona" && (
+            <PersonaSelector
+              onSelect={(persona) => {
+                onPersonaSelect(persona);
+                onNext(getNextStep());
+              }}
+              onSkip={() => onNext(getNextStep())}
+            />
+          )}
           {step === "skin_scan" && (
             <SkinScanStep
               onComplete={(data) => {
                 onVectorUpdate("user", data);
-                onNext(getNextStep());
+                // Don't auto-advance — show results card
               }}
+              onContinue={() => onNext(getNextStep())}
               onSkip={() => onNext(getNextStep())}
+              skinData={vectors.user}
             />
           )}
           {step === "environment" && (
@@ -410,38 +413,136 @@ function SetupWizard({
           className="text-xs text-muted-foreground"
           onClick={onSkip}
         >
-          Skip all and go to chat →
+          {t("skip_all")}
         </Button>
       </div>
     </div>
   );
 }
 
-// ─── Individual Step Components ───
+// ─── Skin Scan Step with Results Card ───
 
 function SkinScanStep({
   onComplete,
+  onContinue,
   onSkip,
+  skinData,
 }: {
   onComplete: (data: unknown) => void;
+  onContinue: () => void;
   onSkip: () => void;
+  skinData?: SkinAnalysis;
 }) {
+  const { t } = useLanguage();
+
+  // If analysis done, show results card
+  if (skinData) {
+    return (
+      <div>
+        <div className="text-center mb-6">
+          <div className="text-4xl mb-3">✅</div>
+          <h2 className="text-2xl font-bold mb-1">{t("skin_complete")}</h2>
+        </div>
+
+        {/* Skin Type */}
+        {skinData.skin_type && (
+          <div className="text-center mb-4">
+            <Badge className="text-sm px-4 py-1.5 rounded-full bg-gradient-to-r from-sil-lavender to-sil-rose text-white border-0">
+              {t("skin_type")}: {skinData.skin_type}
+            </Badge>
+          </div>
+        )}
+
+        {/* Metrics */}
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          <MetricCard
+            label={t("skin_hydration")}
+            value={skinData.hydration != null ? `${skinData.hydration}%` : "N/A"}
+            color="text-blue-400"
+          />
+          <MetricCard
+            label={t("skin_oil")}
+            value={skinData.oil_level != null ? `${skinData.oil_level}%` : "N/A"}
+            color="text-amber-400"
+          />
+          <MetricCard
+            label={t("skin_texture")}
+            value={skinData.texture || "N/A"}
+            color="text-emerald-400"
+          />
+        </div>
+
+        {/* Issues */}
+        {skinData.issues && skinData.issues.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs text-muted-foreground mb-2">{t("skin_issues")}</p>
+            <div className="flex flex-wrap gap-2">
+              {skinData.issues.map((issue) => {
+                const severity = skinData.severity?.[issue] || 0;
+                const color =
+                  severity >= 0.7
+                    ? "bg-red-500/10 text-red-400 border-red-500/20"
+                    : severity >= 0.4
+                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                    : "bg-blue-500/10 text-blue-400 border-blue-500/20";
+                return (
+                  <Badge key={issue} variant="outline" className={`rounded-full text-xs ${color}`}>
+                    {issue.replace(/_/g, " ")}
+                    {severity > 0 && ` ${Math.round(severity * 100)}%`}
+                  </Badge>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Brief Note */}
+        {skinData.brief_note && (
+          <div className="bg-muted/30 rounded-xl p-3 mb-5 text-sm text-muted-foreground italic">
+            &quot;{skinData.brief_note}&quot;
+          </div>
+        )}
+
+        <div className="flex justify-between">
+          <Button variant="ghost" size="sm" onClick={onSkip}>
+            {t("skin_retry")}
+          </Button>
+          <Button
+            className="rounded-full px-6 bg-gradient-to-r from-sil-rose to-pink-400 text-white border-0"
+            onClick={onContinue}
+          >
+            {t("skin_continue")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // No data yet — show scanner
   return (
     <div className="text-center">
       <div className="text-4xl mb-4">📸</div>
-      <h2 className="text-2xl font-bold mb-2">Skin Analysis</h2>
-      <p className="text-muted-foreground mb-6 text-sm">
-        Take a selfie or upload a photo for AI-powered skin analysis using
-        Claude Vision.
-      </p>
+      <h2 className="text-2xl font-bold mb-2">{t("skin_title")}</h2>
+      <p className="text-muted-foreground mb-6 text-sm">{t("skin_desc")}</p>
       <SkinScanner onAnalysisComplete={onComplete} />
       <Separator className="my-6" />
       <Button variant="ghost" size="sm" onClick={onSkip}>
-        Skip this step
+        {t("skin_skip")}
       </Button>
     </div>
   );
 }
+
+function MetricCard({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="bg-muted/30 rounded-xl p-3 text-center">
+      <p className="text-[10px] text-muted-foreground mb-1">{label}</p>
+      <p className={`text-lg font-bold ${color}`}>{value}</p>
+    </div>
+  );
+}
+
+// ─── Environment Step with City + Season ───
 
 function EnvironmentStep({
   onComplete,
@@ -451,16 +552,40 @@ function EnvironmentStep({
   onSkip: () => void;
 }) {
   const [loading, setLoading] = useState(false);
+  const [selectedSeason, setSelectedSeason] = useState<string | null>(null);
+  const { language, t } = useLanguage();
+
+  // Determine current season
+  const currentSeason = (() => {
+    const m = new Date().getMonth() + 1;
+    if (m >= 3 && m <= 5) return "spring";
+    if (m >= 6 && m <= 8) return "summer";
+    if (m >= 9 && m <= 11) return "fall";
+    return "winter";
+  })();
+
+  const cities = [
+    { id: "seoul", emoji: "🇰🇷", name: { ko: "서울", en: "Seoul", ja: "ソウル" } },
+    { id: "tokyo", emoji: "🇯🇵", name: { ko: "도쿄", en: "Tokyo", ja: "東京" } },
+    { id: "la", emoji: "🇺🇸", name: { ko: "LA", en: "Los Angeles", ja: "ロサンゼルス" } },
+    { id: "nyc", emoji: "🗽", name: { ko: "뉴욕", en: "New York", ja: "ニューヨーク" } },
+    { id: "paris", emoji: "🇫🇷", name: { ko: "파리", en: "Paris", ja: "パリ" } },
+    { id: "bangkok", emoji: "🇹🇭", name: { ko: "방콕", en: "Bangkok", ja: "バンコク" } },
+  ];
+
+  const seasons = [
+    { id: "spring", label: t("env_spring") },
+    { id: "summer", label: t("env_summer") },
+    { id: "fall", label: t("env_fall") },
+    { id: "winter", label: t("env_winter") },
+  ];
 
   const detectLocation = async () => {
     setLoading(true);
     try {
-      // Try browser geolocation
       const position = await new Promise<GeolocationPosition>(
         (resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(resolve, reject, {
-            timeout: 5000,
-          })
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 5000 })
       );
       const data = await getWeather(
         position.coords.latitude,
@@ -468,45 +593,95 @@ function EnvironmentStep({
       );
       onComplete(data);
     } catch {
-      // Fallback: Seoul default or demo data
       try {
         const data = await getWeather();
         onComplete(data);
       } catch {
         onComplete({
-          temp: 22,
-          humidity: 45,
-          uvi: 6,
-          description: "Partly cloudy",
-          city: "Seoul",
-          aqi: 75,
+          temp: 22, humidity: 45, uvi: 6,
+          description: "Partly cloudy", city: "Seoul", aqi: 75,
         });
       }
     }
     setLoading(false);
   };
 
+  const selectCity = async (cityId: string) => {
+    setLoading(true);
+    try {
+      const season = selectedSeason || currentSeason;
+      const data = await getWeather(undefined, undefined, cityId, season);
+      onComplete(data);
+    } catch {
+      onComplete({
+        temp: 22, humidity: 45, uvi: 6,
+        description: "Partly cloudy", city: cityId, aqi: 75,
+      });
+    }
+    setLoading(false);
+  };
+
   return (
-    <div className="text-center">
-      <div className="text-4xl mb-4">🌤</div>
-      <h2 className="text-2xl font-bold mb-2">Environment</h2>
-      <p className="text-muted-foreground mb-6 text-sm">
-        We&apos;ll check current weather, UV index, and air quality in your area.
-      </p>
+    <div>
+      <div className="text-center mb-6">
+        <div className="text-4xl mb-4">🌤</div>
+        <h2 className="text-2xl font-bold mb-2">{t("env_title")}</h2>
+        <p className="text-muted-foreground text-sm">{t("env_desc")}</p>
+      </div>
+
+      {/* GPS Detection */}
       <Button
-        className="rounded-full px-6 bg-gradient-to-r from-sil-sky to-blue-400 text-white border-0"
+        className="w-full rounded-full px-6 mb-6 bg-gradient-to-r from-sil-sky to-blue-400 text-white border-0"
         onClick={detectLocation}
         disabled={loading}
       >
-        {loading ? "Detecting..." : "📍 Detect My Location"}
+        {loading ? t("detecting") : `📍 ${t("env_detect")}`}
       </Button>
+
+      {/* City Selection */}
+      <p className="text-xs text-muted-foreground text-center mb-3">{t("env_or_select")}</p>
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        {cities.map((city) => (
+          <Button
+            key={city.id}
+            variant="outline"
+            size="sm"
+            className="rounded-full text-xs"
+            onClick={() => selectCity(city.id)}
+            disabled={loading}
+          >
+            {city.emoji} {city.name[language]}
+          </Button>
+        ))}
+      </div>
+
+      {/* Season Selection */}
+      <p className="text-xs text-muted-foreground text-center mb-3">{t("env_season")}</p>
+      <div className="grid grid-cols-4 gap-2">
+        {seasons.map((s) => (
+          <Button
+            key={s.id}
+            variant={(selectedSeason || currentSeason) === s.id ? "default" : "outline"}
+            size="sm"
+            className="rounded-full text-xs"
+            onClick={() => setSelectedSeason(s.id)}
+          >
+            {s.label}
+          </Button>
+        ))}
+      </div>
+
       <Separator className="my-6" />
-      <Button variant="ghost" size="sm" onClick={onSkip}>
-        Skip this step
-      </Button>
+      <div className="text-center">
+        <Button variant="ghost" size="sm" onClick={onSkip}>
+          {t("skip")}
+        </Button>
+      </div>
     </div>
   );
 }
+
+// ─── Lifestyle Step ───
 
 function LifestyleStep({
   onComplete,
@@ -515,6 +690,7 @@ function LifestyleStep({
   onComplete: (data: LifestyleVector) => void;
   onSkip: () => void;
 }) {
+  const { t } = useLanguage();
   const [lifestyle, setLifestyle] = useState<LifestyleVector>({
     sleep_hours: 7,
     stress_level: "medium",
@@ -527,16 +703,14 @@ function LifestyleStep({
     <div>
       <div className="text-center mb-6">
         <div className="text-4xl mb-4">🌿</div>
-        <h2 className="text-2xl font-bold mb-2">Lifestyle</h2>
-        <p className="text-muted-foreground text-sm">
-          Tell us about your daily habits for personalized recommendations.
-        </p>
+        <h2 className="text-2xl font-bold mb-2">{t("life_title")}</h2>
+        <p className="text-muted-foreground text-sm">{t("life_desc")}</p>
       </div>
 
       <div className="space-y-5">
         <div>
           <label className="text-sm font-medium mb-2 block">
-            Sleep: {lifestyle.sleep_hours}h
+            {t("life_sleep")}: {lifestyle.sleep_hours}h
           </label>
           <input
             type="range"
@@ -544,16 +718,13 @@ function LifestyleStep({
             max={12}
             value={lifestyle.sleep_hours}
             onChange={(e) =>
-              setLifestyle((p) => ({
-                ...p,
-                sleep_hours: Number(e.target.value),
-              }))
+              setLifestyle((p) => ({ ...p, sleep_hours: Number(e.target.value) }))
             }
             className="w-full accent-sil-mint"
           />
         </div>
         <div>
-          <label className="text-sm font-medium mb-2 block">Stress Level</label>
+          <label className="text-sm font-medium mb-2 block">{t("life_stress")}</label>
           <div className="flex gap-2">
             {(["low", "medium", "high"] as const).map((level) => (
               <Button
@@ -561,17 +732,15 @@ function LifestyleStep({
                 variant={lifestyle.stress_level === level ? "default" : "outline"}
                 size="sm"
                 className="flex-1 rounded-full capitalize"
-                onClick={() =>
-                  setLifestyle((p) => ({ ...p, stress_level: level }))
-                }
+                onClick={() => setLifestyle((p) => ({ ...p, stress_level: level }))}
               >
-                {level}
+                {t(level as "low" | "medium" | "high")}
               </Button>
             ))}
           </div>
         </div>
         <div>
-          <label className="text-sm font-medium mb-2 block">Exercise</label>
+          <label className="text-sm font-medium mb-2 block">{t("life_exercise")}</label>
           <div className="flex gap-2">
             {(["none", "light", "moderate", "active"] as const).map((freq) => (
               <Button
@@ -579,11 +748,9 @@ function LifestyleStep({
                 variant={lifestyle.exercise_freq === freq ? "default" : "outline"}
                 size="sm"
                 className="flex-1 rounded-full capitalize text-xs"
-                onClick={() =>
-                  setLifestyle((p) => ({ ...p, exercise_freq: freq }))
-                }
+                onClick={() => setLifestyle((p) => ({ ...p, exercise_freq: freq }))}
               >
-                {freq}
+                {t(freq as "none" | "light" | "moderate" | "active")}
               </Button>
             ))}
           </div>
@@ -592,18 +759,20 @@ function LifestyleStep({
 
       <div className="flex justify-between mt-8">
         <Button variant="ghost" size="sm" onClick={onSkip}>
-          Skip
+          {t("skip")}
         </Button>
         <Button
           className="rounded-full px-6 bg-gradient-to-r from-sil-mint to-emerald-400 text-white border-0"
           onClick={() => onComplete(lifestyle)}
         >
-          Continue
+          {t("life_continue")}
         </Button>
       </div>
     </div>
   );
 }
+
+// ─── TPO Step ───
 
 function TPOStep({
   onComplete,
@@ -612,6 +781,7 @@ function TPOStep({
   onComplete: (data: TPOVector) => void;
   onSkip: () => void;
 }) {
+  const { t } = useLanguage();
   const [tpo, setTPO] = useState<TPOVector>({
     time: "morning",
     place: "office",
@@ -619,41 +789,39 @@ function TPOStep({
   });
 
   const timeOptions = [
-    { value: "morning", label: "🌅 Morning" },
-    { value: "afternoon", label: "☀️ Afternoon" },
-    { value: "evening", label: "🌆 Evening" },
-    { value: "night", label: "🌙 Night" },
+    { value: "morning", label: "🌅" },
+    { value: "afternoon", label: "☀️" },
+    { value: "evening", label: "🌆" },
+    { value: "night", label: "🌙" },
   ] as const;
 
   const placeOptions = [
-    { value: "office", label: "🏢 Office" },
-    { value: "outdoor", label: "🌳 Outdoor" },
-    { value: "home", label: "🏠 Home" },
-    { value: "gym", label: "💪 Gym" },
-    { value: "travel", label: "✈️ Travel" },
+    { value: "office", label: "🏢" },
+    { value: "outdoor", label: "🌳" },
+    { value: "home", label: "🏠" },
+    { value: "gym", label: "💪" },
+    { value: "travel", label: "✈️" },
   ] as const;
 
   const occasionOptions = [
-    { value: "daily", label: "📅 Daily" },
-    { value: "date", label: "💕 Date" },
-    { value: "meeting", label: "💼 Meeting" },
-    { value: "workout", label: "🏃 Workout" },
-    { value: "special", label: "🎉 Special" },
+    { value: "daily", label: "📅" },
+    { value: "date", label: "💕" },
+    { value: "meeting", label: "💼" },
+    { value: "workout", label: "🏃" },
+    { value: "special", label: "🎉" },
   ] as const;
 
   return (
     <div>
       <div className="text-center mb-6">
         <div className="text-4xl mb-4">🎯</div>
-        <h2 className="text-2xl font-bold mb-2">Time / Place / Occasion</h2>
-        <p className="text-muted-foreground text-sm">
-          Context matters. What&apos;s your situation right now?
-        </p>
+        <h2 className="text-2xl font-bold mb-2">{t("tpo_title")}</h2>
+        <p className="text-muted-foreground text-sm">{t("tpo_desc")}</p>
       </div>
 
       <div className="space-y-5">
         <div>
-          <label className="text-sm font-medium mb-2 block">Time</label>
+          <label className="text-sm font-medium mb-2 block">{t("tpo_time")}</label>
           <div className="grid grid-cols-4 gap-2">
             {timeOptions.map((opt) => (
               <Button
@@ -663,13 +831,13 @@ function TPOStep({
                 className="rounded-full text-xs"
                 onClick={() => setTPO((p) => ({ ...p, time: opt.value }))}
               >
-                {opt.label}
+                {opt.label} {opt.value}
               </Button>
             ))}
           </div>
         </div>
         <div>
-          <label className="text-sm font-medium mb-2 block">Place</label>
+          <label className="text-sm font-medium mb-2 block">{t("tpo_place")}</label>
           <div className="grid grid-cols-3 gap-2">
             {placeOptions.map((opt) => (
               <Button
@@ -679,13 +847,13 @@ function TPOStep({
                 className="rounded-full text-xs"
                 onClick={() => setTPO((p) => ({ ...p, place: opt.value }))}
               >
-                {opt.label}
+                {opt.label} {opt.value}
               </Button>
             ))}
           </div>
         </div>
         <div>
-          <label className="text-sm font-medium mb-2 block">Occasion</label>
+          <label className="text-sm font-medium mb-2 block">{t("tpo_occasion")}</label>
           <div className="grid grid-cols-3 gap-2">
             {occasionOptions.map((opt) => (
               <Button
@@ -695,7 +863,7 @@ function TPOStep({
                 className="rounded-full text-xs"
                 onClick={() => setTPO((p) => ({ ...p, occasion: opt.value }))}
               >
-                {opt.label}
+                {opt.label} {opt.value}
               </Button>
             ))}
           </div>
@@ -704,18 +872,20 @@ function TPOStep({
 
       <div className="flex justify-between mt-8">
         <Button variant="ghost" size="sm" onClick={onSkip}>
-          Skip
+          {t("skip")}
         </Button>
         <Button
           className="rounded-full px-6 bg-gradient-to-r from-sil-gold to-amber-400 text-white border-0"
           onClick={() => onComplete(tpo)}
         >
-          Continue
+          {t("life_continue")}
         </Button>
       </div>
     </div>
   );
 }
+
+// ─── Theme Step ───
 
 function ThemeStep({
   onComplete,
@@ -724,6 +894,7 @@ function ThemeStep({
   onComplete: (data: ThemeVector) => void;
   onSkip: () => void;
 }) {
+  const { t } = useLanguage();
   const [theme, setTheme] = useState<ThemeVector>({
     style: "glass_skin",
     finish: "dewy",
@@ -731,12 +902,12 @@ function ThemeStep({
   });
 
   const styles: { value: ThemeStyle; label: string; desc: string }[] = [
-    { value: "glass_skin", label: "💎 Glass Skin", desc: "Luminous, translucent glow" },
-    { value: "clean_girl", label: "🧼 Clean Girl", desc: "Effortless, minimal" },
-    { value: "k_idol", label: "⭐ K-Idol", desc: "Flawless, camera-ready" },
-    { value: "natural", label: "🌸 Natural", desc: "Skin-like, no-makeup look" },
-    { value: "dewy", label: "💧 Dewy", desc: "Fresh, hydrated finish" },
-    { value: "matte", label: "🪨 Matte", desc: "Smooth, shine-free" },
+    { value: "glass_skin", label: "💎 Glass Skin", desc: "Luminous glow" },
+    { value: "clean_girl", label: "🧼 Clean Girl", desc: "Effortless" },
+    { value: "k_idol", label: "⭐ K-Idol", desc: "Camera-ready" },
+    { value: "natural", label: "🌸 Natural", desc: "No-makeup look" },
+    { value: "dewy", label: "💧 Dewy", desc: "Fresh & hydrated" },
+    { value: "matte", label: "🪨 Matte", desc: "Shine-free" },
     { value: "minimalist", label: "⚡ Minimalist", desc: "Essentials only" },
   ];
 
@@ -744,10 +915,8 @@ function ThemeStep({
     <div>
       <div className="text-center mb-6">
         <div className="text-4xl mb-4">🎨</div>
-        <h2 className="text-2xl font-bold mb-2">Theme & Style</h2>
-        <p className="text-muted-foreground text-sm">
-          What&apos;s your vibe? Choose your aesthetic direction.
-        </p>
+        <h2 className="text-2xl font-bold mb-2">{t("theme_title")}</h2>
+        <p className="text-muted-foreground text-sm">{t("theme_desc")}</p>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -762,16 +931,14 @@ function ThemeStep({
           >
             <div>
               <div className="text-sm font-medium">{s.label}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">
-                {s.desc}
-              </div>
+              <div className="text-[10px] text-muted-foreground mt-0.5">{s.desc}</div>
             </div>
           </Button>
         ))}
       </div>
 
       <div className="mt-5">
-        <label className="text-sm font-medium mb-2 block">Intensity</label>
+        <label className="text-sm font-medium mb-2 block">{t("theme_intensity")}</label>
         <div className="flex gap-2">
           {(["subtle", "moderate", "bold"] as const).map((level) => (
             <Button
@@ -781,7 +948,7 @@ function ThemeStep({
               className="flex-1 rounded-full capitalize"
               onClick={() => setTheme((p) => ({ ...p, intensity: level }))}
             >
-              {level}
+              {t(level as "subtle" | "moderate" | "bold")}
             </Button>
           ))}
         </div>
@@ -789,13 +956,13 @@ function ThemeStep({
 
       <div className="flex justify-between mt-8">
         <Button variant="ghost" size="sm" onClick={onSkip}>
-          Skip
+          {t("skip")}
         </Button>
         <Button
           className="rounded-full px-6 bg-gradient-to-r from-sil-lavender to-violet-400 text-white border-0"
           onClick={() => onComplete(theme)}
         >
-          Start Consultation →
+          {t("theme_start")}
         </Button>
       </div>
     </div>
@@ -807,30 +974,14 @@ function ThemeStep({
 function generateDemoResponse(
   question: string,
   vectors: FiveVectors,
-  expert: ExpertInfo
+  expert: ExpertInfo,
+  lang: string,
 ): string {
-  const vectorContext = [];
-  if (vectors.user) vectorContext.push("skin analysis data");
-  if (vectors.environment) vectorContext.push(`weather in ${vectors.environment.city}`);
-  if (vectors.lifestyle) vectorContext.push("lifestyle profile");
-  if (vectors.tpo) vectorContext.push(`${vectors.tpo.time} ${vectors.tpo.occasion} context`);
-  if (vectors.theme) vectorContext.push(`${vectors.theme.style} aesthetic`);
-
-  const context =
-    vectorContext.length > 0
-      ? `Based on your ${vectorContext.join(", ")}, `
-      : "";
-
-  return `${context}I'd be happy to help with that!
-
-This is a **demo response** from ${expert.name} (${expert.role}). In the full version, this connects to the SIL FastAPI backend which processes your question through:
-
-1. **2-Stage Expert Selection** — automatically choosing the right specialist
-2. **5-Vector Context Building** — merging all your data into one prompt
-3. **RAG Knowledge Base** — referencing K-Beauty expert knowledge
-4. **Product Scoring** — finding the best product matches
-
-To connect this frontend to the real SIL engine, set up the FastAPI backend at \`SIL/api.py\` and update the API endpoint in \`sil-web/src/lib/api.ts\`.
-
-*What else would you like to know?* 🌸`;
+  if (lang === "ko") {
+    return `안녕하세요! **${expert.name}**이에요. 현재 SIL 백엔드에 연결할 수 없어서 데모 응답을 보여드리고 있어요.\n\n실제 버전에서는 5-Vector 분석 결과를 기반으로 맞춤형 K-뷰티 상담을 제공합니다. 🌸`;
+  }
+  if (lang === "ja") {
+    return `こんにちは！**${expert.name}**です。現在SILバックエンドに接続できないため、デモ応答を表示しています。\n\n実際のバージョンでは、5-Vector分析に基づくパーソナライズされたK-ビューティー相談を提供します。🌸`;
+  }
+  return `Hi! I'm **${expert.name}**. Currently unable to connect to the SIL backend, so showing a demo response.\n\nIn the full version, this provides personalized K-Beauty consultation based on your 5-Vector analysis. 🌸`;
 }

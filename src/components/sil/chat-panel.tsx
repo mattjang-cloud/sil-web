@@ -1,31 +1,149 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import type { ChatMessage, ExpertInfo } from "@/lib/types";
+import { useLanguage } from "@/lib/language-context";
+import type { ChatMessage, ExpertInfo, FiveVectors } from "@/lib/types";
+import type { Lang } from "@/lib/ui-strings";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
   isLoading: boolean;
   onSend: (message: string) => void;
   expert: ExpertInfo;
+  vectors?: FiveVectors;
 }
 
-const QUICK_PROMPTS = [
-  "What's the best routine for my skin?",
-  "Recommend products for hydration",
-  "How to reduce dark circles?",
-  "Morning vs. night routine tips",
-  "Best K-Beauty ingredients for glow",
-];
+/** Context-aware quick prompts based on skin issues & language */
+function getQuickPrompts(vectors?: FiveVectors, lang: Lang = "ko"): string[] {
+  const issues = vectors?.user?.issues || [];
+  const skinType = vectors?.user?.skin_type || "";
 
-export function ChatPanel({ messages, isLoading, onSend, expert }: ChatPanelProps) {
+  const prompts: Record<Lang, Record<string, string>> = {
+    ko: {
+      default1: "내 피부에 맞는 루틴 추천해주세요",
+      default2: "수분 보충에 좋은 제품 추천",
+      default3: "K-뷰티 필수 성분 알려주세요",
+      acne: "트러블 관리 방법 알려주세요",
+      dark_circle: "다크서클 줄이는 방법 알려주세요",
+      dryness: "건조한 피부 보습 루틴 추천해주세요",
+      wrinkle: "주름 개선에 좋은 성분은?",
+      pore: "모공 관리 팁 알려주세요",
+      oiliness: "유분 조절에 좋은 제품 추천해주세요",
+      sensitivity: "민감한 피부에 맞는 저자극 제품은?",
+      oily: "지성 피부 관리법 알려주세요",
+      dry: "건성 피부 루틴 추천해주세요",
+    },
+    en: {
+      default1: "Recommend a routine for my skin",
+      default2: "Best products for hydration",
+      default3: "Must-know K-Beauty ingredients",
+      acne: "How to manage acne breakouts?",
+      dark_circle: "Tips to reduce dark circles",
+      dryness: "Hydration routine for dry skin",
+      wrinkle: "Best anti-wrinkle ingredients?",
+      pore: "Pore minimizing tips",
+      oiliness: "Oil control product recommendations",
+      sensitivity: "Gentle products for sensitive skin?",
+      oily: "Oily skin care tips",
+      dry: "Dry skin routine recommendations",
+    },
+    ja: {
+      default1: "私の肌に合うルーティンを教えて",
+      default2: "保湿に良い製品のおすすめ",
+      default3: "K-ビューティー必須成分を教えて",
+      acne: "ニキビケアの方法を教えて",
+      dark_circle: "クマを減らす方法は？",
+      dryness: "乾燥肌の保湿ルーティン",
+      wrinkle: "シワ改善に良い成分は？",
+      pore: "毛穴ケアのコツを教えて",
+      oiliness: "皮脂コントロール製品のおすすめ",
+      sensitivity: "敏感肌向けの低刺激製品は？",
+      oily: "脂性肌のケア方法",
+      dry: "乾燥肌のルーティンおすすめ",
+    },
+  };
+
+  const p = prompts[lang] || prompts.ko;
+  const result: string[] = [];
+
+  // Add issue-specific prompts first
+  for (const issue of issues) {
+    if (p[issue] && result.length < 2) {
+      result.push(p[issue]);
+    }
+  }
+
+  // Add skin-type specific prompt
+  if (skinType && p[skinType] && result.length < 2) {
+    result.push(p[skinType]);
+  }
+
+  // Fill remaining with defaults
+  const defaults = [p.default1, p.default2, p.default3];
+  for (const d of defaults) {
+    if (result.length >= 3) break;
+    if (!result.includes(d)) result.push(d);
+  }
+
+  return result.slice(0, 3);
+}
+
+/** Simple markdown rendering: **bold**, - list items */
+function renderMarkdown(text: string) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+
+  lines.forEach((line, i) => {
+    // Bold: **text**
+    const parts = line.split(/(\*\*[^*]+\*\*)/g);
+    const rendered = parts.map((part, j) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return (
+          <strong key={j} className="font-semibold">
+            {part.slice(2, -2)}
+          </strong>
+        );
+      }
+      return part;
+    });
+
+    // List item: - text
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("- ") || trimmed.startsWith("• ")) {
+      elements.push(
+        <li key={i} className="ml-4 list-disc">
+          {rendered.map((r, idx) =>
+            typeof r === "string" ? r.replace(/^[-•]\s/, "") : r
+          )}
+        </li>
+      );
+    } else if (line.trim() === "") {
+      elements.push(<br key={i} />);
+    } else {
+      elements.push(
+        <p key={i} className="mb-1.5">
+          {rendered}
+        </p>
+      );
+    }
+  });
+
+  return <div className="space-y-0">{elements}</div>;
+}
+
+export function ChatPanel({ messages, isLoading, onSend, expert, vectors }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const { language, t } = useLanguage();
+
+  const quickPrompts = useMemo(
+    () => getQuickPrompts(vectors, language),
+    [vectors, language]
+  );
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -52,7 +170,6 @@ export function ChatPanel({ messages, isLoading, onSend, expert }: ChatPanelProp
 
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-    // Auto-resize
     const el = e.target;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
@@ -62,9 +179,14 @@ export function ChatPanel({ messages, isLoading, onSend, expert }: ChatPanelProp
     <div className="flex-1 flex flex-col min-h-0">
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
           {messages.length === 0 && (
-            <EmptyState onPromptClick={onSend} expert={expert} />
+            <EmptyState
+              onPromptClick={onSend}
+              expert={expert}
+              prompts={quickPrompts}
+              language={language}
+            />
           )}
 
           {messages.map((msg) => (
@@ -77,19 +199,16 @@ export function ChatPanel({ messages, isLoading, onSend, expert }: ChatPanelProp
 
       {/* Input Area */}
       <div className="border-t border-border/50 bg-card/30 p-4">
-        <form
-          onSubmit={handleSubmit}
-          className="max-w-3xl mx-auto"
-        >
+        <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
           <div className="glass rounded-2xl flex items-end gap-2 p-2">
             <textarea
               ref={inputRef}
               value={input}
               onChange={handleTextareaInput}
               onKeyDown={handleKeyDown}
-              placeholder="Ask your K-Beauty expert..."
+              placeholder={t("chat_placeholder")}
               rows={1}
-              className="flex-1 bg-transparent border-0 outline-none resize-none text-sm px-3 py-2 placeholder:text-muted-foreground/50 max-h-[120px]"
+              className="flex-1 bg-transparent border-0 outline-none resize-none text-base px-3 py-2 placeholder:text-muted-foreground/50 max-h-[120px]"
             />
             <Button
               type="submit"
@@ -113,7 +232,7 @@ export function ChatPanel({ messages, isLoading, onSend, expert }: ChatPanelProp
             </Button>
           </div>
           <p className="text-[10px] text-muted-foreground/50 text-center mt-2">
-            SIL AI can make mistakes. Consult a dermatologist for medical advice.
+            {t("chat_disclaimer")}
           </p>
         </form>
       </div>
@@ -124,24 +243,28 @@ export function ChatPanel({ messages, isLoading, onSend, expert }: ChatPanelProp
 function EmptyState({
   onPromptClick,
   expert,
+  prompts,
+  language,
 }: {
   onPromptClick: (msg: string) => void;
   expert: ExpertInfo;
+  prompts: string[];
+  language: Lang;
 }) {
+  const { t } = useLanguage();
+  const greeting = t("chat_greeting").replace("{name}", expert.name);
+
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-sil-lavender via-sil-rose to-sil-gold flex items-center justify-center text-3xl mb-6 glow-purple animate-float">
         {expert.emoji}
       </div>
-      <h3 className="text-lg font-semibold mb-2">
-        Hi! I&apos;m {expert.name}
-      </h3>
+      <h3 className="text-lg font-semibold mb-2">{greeting}</h3>
       <p className="text-sm text-muted-foreground mb-8 max-w-md">
-        Ask me anything about skincare, K-Beauty products, ingredients, or
-        routines. I&apos;ll use your 5-Vector profile for personalized advice.
+        {t("chat_intro")}
       </p>
       <div className="flex flex-wrap justify-center gap-2 max-w-lg">
-        {QUICK_PROMPTS.map((prompt) => (
+        {prompts.map((prompt) => (
           <Button
             key={prompt}
             variant="outline"
@@ -174,7 +297,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </AvatarFallback>
       </Avatar>
       <div
-        className={`max-w-[80%] ${
+        className={`max-w-[85%] ${
           isUser ? "items-end" : "items-start"
         } flex flex-col`}
       >
@@ -190,13 +313,17 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           </div>
         )}
         <div
-          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+          className={`rounded-2xl px-4 py-3 text-base leading-relaxed ${
             isUser
               ? "bg-gradient-to-r from-sil-lavender to-sil-rose text-white rounded-tr-md"
               : "glass-card rounded-tl-md"
           }`}
         >
-          <div className="whitespace-pre-wrap">{message.content}</div>
+          {isUser ? (
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          ) : (
+            renderMarkdown(message.content)
+          )}
         </div>
         <span className="text-[9px] text-muted-foreground/50 mt-1 px-1">
           {message.timestamp.toLocaleTimeString([], {
