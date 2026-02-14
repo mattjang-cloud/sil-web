@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { analyzeSkin } from "@/lib/api";
@@ -17,47 +17,61 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
   const [preview, setPreview] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [isMobile, setIsMobile] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   // Detect mobile device
   useEffect(() => {
-    const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    const mobile =
+      /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+      ("ontouchstart" in window && window.innerWidth < 1024);
     setIsMobile(mobile);
   }, []);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processFile = useCallback(
+    (file: File) => {
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        setErrorMsg("Image too large. Please use a photo under 10MB.");
+        setMode("error");
+        return;
+      }
 
-    // Validate file size (max 10MB)
-    if (file.size > 10 * 1024 * 1024) {
-      setErrorMsg("Image too large. Please use a photo under 10MB.");
-      setMode("error");
-      return;
-    }
+      // Validate file type
+      if (!file.type.startsWith("image/")) {
+        setErrorMsg("Please select an image file.");
+        setMode("error");
+        return;
+      }
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setPreview(reader.result as string);
-      analyzeImage(reader.result as string);
-    };
-    reader.onerror = () => {
-      setErrorMsg("Failed to read the image file. Please try again.");
-      setMode("error");
-    };
-    reader.readAsDataURL(file);
-  };
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        setPreview(result);
+        analyzeImage(result);
+      };
+      reader.onerror = () => {
+        setErrorMsg("Failed to read the image file. Please try again.");
+        setMode("error");
+      };
+      reader.readAsDataURL(file);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
-  const startCamera = async () => {
-    // On mobile, use the native camera input instead of getUserMedia
-    if (isMobile) {
-      cameraInputRef.current?.click();
-      return;
-    }
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      processFile(file);
+      // Reset the input value so the same file can be re-selected
+      e.target.value = "";
+    },
+    [processFile]
+  );
 
+  const startDesktopCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: 640, height: 480 },
@@ -68,9 +82,8 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
       }
       setMode("camera");
     } catch {
-      // Fallback: open file picker if camera fails
       setErrorMsg(
-        "Camera access denied. Please tap 'Upload Photo' or allow camera access in your browser settings."
+        "Camera access denied. Please tap 'Upload Photo' or allow camera in your browser settings."
       );
       setMode("error");
     }
@@ -101,7 +114,6 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     setMode("analyzing");
     setErrorMsg("");
     try {
-      // Extract base64 data (remove data:image/... prefix if present)
       const base64Data = imageData.includes(",")
         ? imageData.split(",")[1]
         : imageData;
@@ -113,22 +125,16 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
       const errMessage =
         err instanceof Error ? err.message : "Unknown error";
 
-      // Check if it's a timeout error
       if (
         errMessage.includes("timeout") ||
         errMessage.includes("504") ||
         errMessage.includes("502") ||
         errMessage.includes("FUNCTION_INVOCATION_TIMEOUT")
       ) {
-        setErrorMsg(
-          "Analysis timed out. The AI needs more time than the server allows. Using quick analysis instead..."
-        );
-        // Use demo result on timeout
+        setErrorMsg("Analysis timed out. Using quick analysis instead...");
         useDemoResult();
       } else {
-        setErrorMsg(
-          "Analysis failed: " + errMessage + ". Using quick analysis..."
-        );
+        setErrorMsg("Analysis failed: " + errMessage + ". Using quick analysis...");
         useDemoResult();
       }
     }
@@ -157,11 +163,9 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     setMode("idle");
     setPreview(null);
     setErrorMsg("");
-    // Reset file inputs so same file can be re-selected
-    if (fileInputRef.current) fileInputRef.current.value = "";
-    if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
 
+  // ─── Desktop camera view ───
   if (mode === "camera") {
     return (
       <div className="space-y-4">
@@ -171,7 +175,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
             autoPlay
             playsInline
             muted
-            className="w-full h-full object-cover mirror"
+            className="w-full h-full object-cover"
             style={{ transform: "scaleX(-1)" }}
           />
           <div className="absolute inset-0 border-2 border-sil-lavender/30 rounded-2xl pointer-events-none" />
@@ -201,6 +205,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     );
   }
 
+  // ─── Analyzing view ───
   if (mode === "analyzing") {
     return (
       <div className="flex flex-col items-center py-8">
@@ -240,6 +245,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     );
   }
 
+  // ─── Error view ───
   if (mode === "error") {
     return (
       <div className="flex flex-col items-center py-4 gap-4">
@@ -268,6 +274,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     );
   }
 
+  // ─── Done view ───
   if (mode === "done") {
     return (
       <div className="flex flex-col items-center py-4">
@@ -282,44 +289,73 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
     );
   }
 
-  // idle mode
+  // ─── Idle mode ───
+  // Use <label> wrapping to trigger file inputs — most reliable cross-browser method.
+  // On mobile: "Take Photo" uses capture="user" (opens front camera directly).
+  //            "Upload Photo" has no capture (opens gallery/camera chooser).
+  // On desktop: "Take Selfie" uses getUserMedia, "Upload Photo" opens file picker.
   return (
     <div className="flex flex-col items-center gap-4">
       <div className="flex gap-3">
-        <Button
-          className="rounded-full px-6 bg-gradient-to-r from-sil-rose to-pink-400 text-white border-0"
-          onClick={startCamera}
-        >
-          📸 {isMobile ? "Take Photo" : "Take Selfie"}
-        </Button>
-        <Button
-          variant="outline"
-          className="rounded-full px-6 border-border/50"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          📁 Upload Photo
-        </Button>
+        {isMobile ? (
+          <>
+            {/* Mobile: label-based approach for camera — most reliable */}
+            <label
+              htmlFor="sil-camera-input"
+              className="inline-flex items-center justify-center rounded-full px-6 h-10 text-sm font-medium bg-gradient-to-r from-sil-rose to-pink-400 text-white border-0 cursor-pointer hover:opacity-90 transition-opacity active:scale-95"
+            >
+              📸 Take Photo
+            </label>
+            <label
+              htmlFor="sil-gallery-input"
+              className="inline-flex items-center justify-center rounded-full px-6 h-10 text-sm font-medium bg-background border border-border/50 cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors active:scale-95"
+            >
+              📁 Upload Photo
+            </label>
+          </>
+        ) : (
+          <>
+            {/* Desktop: getUserMedia for camera, file picker for upload */}
+            <Button
+              className="rounded-full px-6 bg-gradient-to-r from-sil-rose to-pink-400 text-white border-0"
+              onClick={startDesktopCamera}
+            >
+              📸 Take Selfie
+            </Button>
+            <label
+              htmlFor="sil-gallery-input"
+              className="inline-flex items-center justify-center rounded-full px-6 h-10 text-sm font-medium bg-background border border-border/50 cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors active:scale-95"
+            >
+              📁 Upload Photo
+            </label>
+          </>
+        )}
       </div>
-      {/* Hidden file input for gallery uploads */}
+
+      {/* Camera input — opens native camera on mobile (front-facing) */}
       <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        onChange={handleFileUpload}
-        className="hidden"
-      />
-      {/* Hidden camera input for mobile native camera */}
-      <input
-        ref={cameraInputRef}
+        id="sil-camera-input"
         type="file"
         accept="image/*"
         capture="user"
-        onChange={handleFileUpload}
+        onChange={handleFileChange}
         className="hidden"
+        aria-hidden="true"
       />
-      <p className="text-[10px] text-muted-foreground">
+
+      {/* Gallery input — NO capture attr = shows gallery/file picker */}
+      <input
+        id="sil-gallery-input"
+        type="file"
+        accept="image/*"
+        onChange={handleFileChange}
+        className="hidden"
+        aria-hidden="true"
+      />
+
+      <p className="text-[10px] text-muted-foreground text-center max-w-xs">
         {isMobile
-          ? "Tap 'Take Photo' to open camera, or upload from gallery."
+          ? "Tap 'Take Photo' to open your camera, or 'Upload Photo' to pick from gallery."
           : "Your photo is analyzed by AI and never stored."}
       </p>
     </div>
