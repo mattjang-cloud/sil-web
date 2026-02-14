@@ -49,10 +49,24 @@ export async function analyzeSkin(
   imageBase64: string,
   analyzer: "claude_vision" | "facepp" | "both" = "claude_vision"
 ): Promise<SkinAnalysisResponse> {
-  return apiFetch<SkinAnalysisResponse>("/api/analyze-skin", {
-    method: "POST",
-    body: JSON.stringify({ image: imageBase64, analyzer }),
-  });
+  // Claude Vision can take 15-30s — use AbortController for 45s timeout
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+  try {
+    return await apiFetch<SkinAnalysisResponse>("/api/analyze-skin", {
+      method: "POST",
+      body: JSON.stringify({ image: imageBase64, analyzer }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Analysis timed out after 45 seconds. Please try again.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 // ─── Consultation (Streaming) ───

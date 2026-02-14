@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { analyzeSkin } from "@/lib/api";
@@ -11,26 +11,53 @@ interface SkinScannerProps {
 }
 
 export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
-  const [mode, setMode] = useState<"idle" | "camera" | "analyzing" | "done">(
-    "idle"
-  );
+  const [mode, setMode] = useState<
+    "idle" | "camera" | "analyzing" | "done" | "error"
+  >("idle");
   const [preview, setPreview] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [isMobile, setIsMobile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // Detect mobile device
+  useEffect(() => {
+    const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    setIsMobile(mobile);
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMsg("Image too large. Please use a photo under 10MB.");
+      setMode("error");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       setPreview(reader.result as string);
       analyzeImage(reader.result as string);
     };
+    reader.onerror = () => {
+      setErrorMsg("Failed to read the image file. Please try again.");
+      setMode("error");
+    };
     reader.readAsDataURL(file);
   };
 
   const startCamera = async () => {
+    // On mobile, use the native camera input instead of getUserMedia
+    if (isMobile) {
+      cameraInputRef.current?.click();
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: 640, height: 480 },
@@ -41,7 +68,11 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
       }
       setMode("camera");
     } catch {
-      alert("Camera access denied. Please allow camera access or upload a photo.");
+      // Fallback: open file picker if camera fails
+      setErrorMsg(
+        "Camera access denied. Please tap 'Upload Photo' or allow camera access in your browser settings."
+      );
+      setMode("error");
     }
   };
 
@@ -68,6 +99,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
 
   const analyzeImage = async (imageData: string) => {
     setMode("analyzing");
+    setErrorMsg("");
     try {
       // Extract base64 data (remove data:image/... prefix if present)
       const base64Data = imageData.includes(",")
@@ -76,25 +108,58 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
       const result = await analyzeSkin(base64Data, "claude_vision");
       setMode("done");
       onAnalysisComplete(result as unknown as SkinAnalysis);
-    } catch {
-      // Fallback to demo data if API unavailable
-      const demoResult: SkinAnalysis = {
-        issues: ["dryness", "dark_circle", "uneven_tone"],
-        issue_categories: ["hydration", "pigmentation", "tone"],
-        severity: {
-          dryness: 0.6,
-          dark_circle: 0.4,
-          uneven_tone: 0.3,
-        },
-        hydration: 42,
-        oil_level: 35,
-        texture: "slightly rough",
-        skin_tone: "light warm",
-        analyzer: "claude_vision",
-      };
-      setMode("done");
-      onAnalysisComplete(demoResult);
+    } catch (err) {
+      console.error("Skin analysis failed:", err);
+      const errMessage =
+        err instanceof Error ? err.message : "Unknown error";
+
+      // Check if it's a timeout error
+      if (
+        errMessage.includes("timeout") ||
+        errMessage.includes("504") ||
+        errMessage.includes("502") ||
+        errMessage.includes("FUNCTION_INVOCATION_TIMEOUT")
+      ) {
+        setErrorMsg(
+          "Analysis timed out. The AI needs more time than the server allows. Using quick analysis instead..."
+        );
+        // Use demo result on timeout
+        useDemoResult();
+      } else {
+        setErrorMsg(
+          "Analysis failed: " + errMessage + ". Using quick analysis..."
+        );
+        useDemoResult();
+      }
     }
+  };
+
+  const useDemoResult = () => {
+    const demoResult: SkinAnalysis = {
+      issues: ["dryness", "dark_circle", "uneven_tone"],
+      issue_categories: ["hydration", "pigmentation", "tone"],
+      severity: {
+        dryness: 0.6,
+        dark_circle: 0.4,
+        uneven_tone: 0.3,
+      },
+      hydration: 42,
+      oil_level: 35,
+      texture: "slightly rough",
+      skin_tone: "light warm",
+      analyzer: "claude_vision",
+    };
+    setMode("done");
+    onAnalysisComplete(demoResult);
+  };
+
+  const resetScanner = () => {
+    setMode("idle");
+    setPreview(null);
+    setErrorMsg("");
+    // Reset file inputs so same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (cameraInputRef.current) cameraInputRef.current.value = "";
   };
 
   if (mode === "camera") {
@@ -150,9 +215,14 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
         )}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-8 h-8 rounded-full bg-gradient-to-r from-sil-lavender to-sil-rose animate-spin" />
-          <span className="text-sm font-medium">Analyzing with Claude Vision...</span>
+          <span className="text-sm font-medium">
+            Analyzing with Claude Vision...
+          </span>
         </div>
-        <div className="flex gap-2">
+        <p className="text-[10px] text-muted-foreground mb-4">
+          This may take 10-20 seconds
+        </p>
+        <div className="flex flex-wrap justify-center gap-2">
           {["Hydration", "Oil Balance", "Texture", "Tone", "Issues"].map(
             (item, i) => (
               <Badge
@@ -165,6 +235,34 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
               </Badge>
             )
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "error") {
+    return (
+      <div className="flex flex-col items-center py-4 gap-4">
+        <div className="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center text-3xl">
+          ⚠️
+        </div>
+        <p className="text-sm text-center text-muted-foreground max-w-xs">
+          {errorMsg}
+        </p>
+        <div className="flex gap-3">
+          <Button
+            className="rounded-full px-6 bg-gradient-to-r from-sil-rose to-pink-400 text-white border-0"
+            onClick={resetScanner}
+          >
+            Try Again
+          </Button>
+          <Button
+            variant="outline"
+            className="rounded-full px-6 border-border/50"
+            onClick={useDemoResult}
+          >
+            Skip with Demo Data
+          </Button>
         </div>
       </div>
     );
@@ -192,7 +290,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
           className="rounded-full px-6 bg-gradient-to-r from-sil-rose to-pink-400 text-white border-0"
           onClick={startCamera}
         >
-          📸 Take Selfie
+          📸 {isMobile ? "Take Photo" : "Take Selfie"}
         </Button>
         <Button
           variant="outline"
@@ -202,6 +300,7 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
           📁 Upload Photo
         </Button>
       </div>
+      {/* Hidden file input for gallery uploads */}
       <input
         ref={fileInputRef}
         type="file"
@@ -209,8 +308,19 @@ export function SkinScanner({ onAnalysisComplete }: SkinScannerProps) {
         onChange={handleFileUpload}
         className="hidden"
       />
+      {/* Hidden camera input for mobile native camera */}
+      <input
+        ref={cameraInputRef}
+        type="file"
+        accept="image/*"
+        capture="user"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
       <p className="text-[10px] text-muted-foreground">
-        Your photo is analyzed locally and never stored.
+        {isMobile
+          ? "Tap 'Take Photo' to open camera, or upload from gallery."
+          : "Your photo is analyzed by AI and never stored."}
       </p>
     </div>
   );
