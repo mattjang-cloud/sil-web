@@ -5,6 +5,8 @@
  * Glassmorphism + HUD overlay style
  */
 
+import type React from "react";
+
 // ─── Color Tokens ───
 
 export const CLINICAL_COLORS = {

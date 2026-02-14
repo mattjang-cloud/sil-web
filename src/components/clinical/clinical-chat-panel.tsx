@@ -7,7 +7,6 @@ import {
   GLASS_CARD,
   HUD_LABEL,
   ACCENT_GRADIENT,
-  GRADIENT_TEXT,
 } from "@/lib/clinical-theme";
 import { useLanguage } from "@/lib/language-context";
 import type { ChatMessage, ExpertInfo, FiveVectors, SkinAnalysis } from "@/lib/types";
