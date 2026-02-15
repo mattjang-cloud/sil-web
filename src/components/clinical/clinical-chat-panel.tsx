@@ -69,7 +69,7 @@ export function ClinicalChatPanel({
 
       {/* Input */}
       <form onSubmit={handleSubmit} className="p-4 border-t border-white/8">
-        <div className="flex gap-2 max-w-4xl mx-auto">
+        <div className="flex gap-2">
           <input
             type="text"
             value={input}
@@ -158,10 +158,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
 
   return (
-    <div className={cn("flex max-w-4xl mx-auto", isUser ? "justify-end" : "justify-start")}>
+    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "max-w-[85%] rounded-2xl px-4 py-3",
+          "max-w-[80%] rounded-2xl px-4 py-3",
           isUser
             ? cn("text-white", ACCENT_GRADIENT)
             : cn(GLASS_CARD, "text-white/80")
@@ -188,7 +188,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
 function ThinkingIndicator({ expert }: { expert: ExpertInfo }) {
   return (
-    <div className="flex justify-start max-w-4xl mx-auto">
+    <div className="flex justify-start">
       <div className={cn(GLASS_CARD, "px-4 py-3 flex items-center gap-2")}>
         <span className="text-sm">{expert.emoji}</span>
         <div className="flex gap-1">

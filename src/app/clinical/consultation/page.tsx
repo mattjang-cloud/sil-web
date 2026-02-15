@@ -3,8 +3,6 @@
 import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   GLASS_CARD,
   GLASS_CARD_STRONG,
@@ -16,7 +14,6 @@ import {
 } from "@/lib/clinical-theme";
 import { HudScanner } from "@/components/clinical/hud-scanner";
 import { ClinicalPersonaSelector } from "@/components/clinical/clinical-persona-selector";
-import { ClinicalVectorPanel } from "@/components/clinical/clinical-vector-panel";
 import { ClinicalChatPanel } from "@/components/clinical/clinical-chat-panel";
 import { consult, consultStream, getWeather } from "@/lib/api";
 import { useLanguage } from "@/lib/language-context";
@@ -47,7 +44,6 @@ export default function ClinicalConsultationPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [currentExpert, setCurrentExpert] = useState<ExpertInfo>(INITIAL_EXPERT);
   const [selectedPersona, setSelectedPersona] = useState<PersonaInfo | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const { language, t } = useLanguage();
 
   const completedVectors = Object.keys(vectors).filter(
@@ -191,63 +187,44 @@ export default function ClinicalConsultationPage() {
     );
   }
 
-  // ─── Chat ───
+  // ─── Chat (Full-Width) ───
   if (step === "chat") {
     return (
-      <div className="flex h-[calc(100vh-3.5rem)]">
-        {/* Sidebar */}
-        {sidebarOpen && (
-          <aside className="w-72 border-r border-white/8 hidden lg:block overflow-hidden bg-[#0f172a]/50">
-            <ScrollArea className="h-full">
-              <ClinicalVectorPanel vectors={vectors} />
-            </ScrollArea>
-          </aside>
-        )}
-
-        <main className="flex-1 flex flex-col">
-          {/* Chat Header */}
-          <div className="h-14 border-b border-white/8 flex items-center justify-between px-4 bg-white/[0.02]">
-            <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="lg:hidden text-white/60 hover:text-white"
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-              >
-                ☰
-              </Button>
-              <div className="flex items-center gap-2">
-                <span className="text-xl">{currentExpert.emoji}</span>
-                <div>
-                  <p className="text-sm font-medium text-white/90">{currentExpert.name}</p>
-                  <p className={cn(HUD_LABEL, "text-[9px]")}>{currentExpert.role}</p>
-                </div>
+      <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+        {/* Compact Vector Strip */}
+        <div className="px-4 py-2 border-b border-white/8 bg-white/[0.02]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{currentExpert.emoji}</span>
+              <div>
+                <p className="text-sm font-medium text-white/90">{currentExpert.name}</p>
+                <p className={cn(HUD_LABEL, "text-[9px]")}>{currentExpert.role}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               {completedVectors.map((v) => (
-                <Badge
+                <span
                   key={v}
-                  variant="outline"
-                  className="text-[10px] px-2 py-0.5 rounded-full border-white/10 text-white/40"
+                  className="text-[9px] font-mono text-white/40 px-1.5 py-0.5 rounded bg-white/5 border border-white/8"
                 >
-                  {v.charAt(0).toUpperCase()}
-                </Badge>
+                  {getVectorLabel(v, vectors)}
+                </span>
               ))}
-              <Badge className={cn("text-[10px] px-2 py-0.5 rounded-full border-0 text-white", ACCENT_GRADIENT)}>
+              <span className={cn("text-[10px] px-2 py-0.5 rounded-full text-white", ACCENT_GRADIENT)}>
                 {completedVectors.length}/5
-              </Badge>
+              </span>
             </div>
           </div>
+        </div>
 
-          <ClinicalChatPanel
-            messages={messages}
-            isLoading={isLoading}
-            onSend={handleSendMessage}
-            expert={currentExpert}
-            vectors={vectors}
-          />
-        </main>
+        {/* Full-Width Chat */}
+        <ClinicalChatPanel
+          messages={messages}
+          isLoading={isLoading}
+          onSend={handleSendMessage}
+          expert={currentExpert}
+          vectors={vectors}
+        />
       </div>
     );
   }
@@ -272,6 +249,35 @@ export default function ClinicalConsultationPage() {
       }}
     />
   );
+}
+
+// ─── Vector Label Helper ───
+
+function getVectorLabel(key: string, vectors: FiveVectors): string {
+  switch (key) {
+    case "persona":
+      return "P";
+    case "user": {
+      const skin = vectors.user as SkinAnalysis | undefined;
+      return skin?.skin_type ? `피부:${skin.skin_type}` : "U";
+    }
+    case "environment": {
+      const env = vectors.environment as { temp?: number; humidity?: number } | undefined;
+      return env?.temp != null ? `${env.temp}°/${env.humidity}%` : "E";
+    }
+    case "lifestyle":
+      return "L";
+    case "tpo": {
+      const tpo = vectors.tpo as TPOVector | undefined;
+      return tpo?.occasion ? `TPO:${tpo.occasion}` : "T";
+    }
+    case "theme": {
+      const theme = vectors.theme as ThemeVector | undefined;
+      return theme?.style ? `🎨${theme.style}` : "V";
+    }
+    default:
+      return key.charAt(0).toUpperCase();
+  }
 }
 
 // ─── Clinical Setup Wizard ───
